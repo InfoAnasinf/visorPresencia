@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "visor-presencia"
+version = "0.1.0"
+description = "Visor de presencia en PyQt6 con backend SQL Server."
+requires-python = ">=3.11"
+dependencies = [
+    "PyQt6>=6.6",
+    "SQLAlchemy>=2.0",
+    "pyodbc>=5.1",
+    "cryptography>=42.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-qt>=4.4",
+    "pytest-mock>=3.14",
+    "ruff>=0.6",
+    "black>=24.4",
+    "mypy>=1.9",
+    "types-pyqt6-stubs>=0.1.1",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+lint.select = ["E", "F", "W", "B", "I", "N", "UP", "S"]
+lint.ignore = ["S101"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra"
+testpaths = ["tests"]
+qt_api = "pyqt6"
+
+[tool.mypy]
+python_version = "3.11"
+namespace_packages = true
+plugins = []
+ignore_missing_imports = true
+
+[tool.setuptools.packages.find]
+include = ["app*", "assets*"]
+
+[tool.setuptools.package-data]
+"assets.qss" = ["*.qss"]

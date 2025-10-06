@@ -1,0 +1,35 @@
+/* Shared tokens for light/dark themes */
+
+:root {
+    --color-bg: #f5f6fa;
+    --color-bg-dark: #1f2430;
+    --color-accent: #0063b1;
+    --color-text: #1b1b1b;
+    --color-text-inverse: #f1f1f1;
+    --color-border: #d0d4da;
+    --radius-base: 6px;
+    --spacing-unit: 8px;
+}
+
+QWidget {
+    font-family: system-ui;
+    font-size: 10pt;
+}
+
+QToolBar {
+    border: none;
+    padding: var(--spacing-unit);
+}
+
+QTableView {
+    gridline-color: var(--color-border);
+    selection-background-color: var(--color-accent);
+    selection-color: var(--color-text-inverse);
+    border-radius: var(--radius-base);
+}
+
+QPushButton {
+    padding: calc(var(--spacing-unit) * 0.75) calc(var(--spacing-unit) * 1.5);
+    border-radius: var(--radius-base);
+}
+

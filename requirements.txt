@@ -1,0 +1,6 @@
+# Core application dependencies
+PyQt6>=6.6
+SQLAlchemy>=2.0
+pyodbc>=5.1
+cryptography>=42.0
+

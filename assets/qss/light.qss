@@ -1,0 +1,21 @@
+/* Light theme inheriting from base tokens */
+
+QWidget {
+    background-color: #f5f6fa;
+    color: #1b1b1b;
+}
+
+QToolBar {
+    background-color: #ffffff;
+}
+
+QStatusBar {
+    background-color: #ffffff;
+    color: #1b1b1b;
+}
+
+QLineEdit, QDateEdit {
+    background-color: #ffffff;
+    border: 1px solid #d0d4da;
+}
+

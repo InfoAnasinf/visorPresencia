@@ -1,0 +1,30 @@
+/* Dark theme inheriting from base tokens */
+
+QWidget {
+    background-color: #1f2430;
+    color: #f1f1f1;
+}
+
+QToolBar {
+    background-color: #272c36;
+}
+
+QStatusBar {
+    background-color: #272c36;
+    color: #f1f1f1;
+}
+
+QLineEdit, QDateEdit {
+    background-color: #272c36;
+    border: 1px solid #3a404c;
+}
+
+QPushButton {
+    background-color: #0063b1;
+    color: #f1f1f1;
+}
+
+QPushButton:hover {
+    background-color: #0a74c1;
+}
+
