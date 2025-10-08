@@ -8,10 +8,6 @@ from typing import Any
 from PyQt6.QtCore import QSettings
 
 
-ORG_NAME = "FinidiDev"
-APP_NAME = "VisorPresencia"
-
-
 @dataclass(slots=True)
 class SettingKey:
     """Strongly-typed keys used with QSettings."""
@@ -41,3 +37,9 @@ class AppSettings:
         """Remove a stored value."""
         self._settings.remove(key.path())
 
+
+ORG_NAME = "FinidiDev"
+APP_NAME = "VisorPresencia"
+
+LAST_EMPLOYEE = SettingKey("ui", "last_employee_code")
+THEME = SettingKey("ui", "theme")
