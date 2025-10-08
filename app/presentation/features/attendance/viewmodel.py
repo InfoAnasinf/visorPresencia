@@ -8,7 +8,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
+from time import perf_counter
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -21,6 +22,7 @@ from app.domain.usecases.load_employees import load_employees
 from app.domain.usecases.load_daily_statuses import load_daily_statuses
 from app.domain.usecases.load_weekly_attendance import load_weekly_attendance
 from app.domain.usecases.load_recent_accesses import load_recent_accesses
+from app.domain.usecases.load_yearly_statistics import load_yearly_statistics
 from app.presentation.features.attendance.model import AttendanceTreeModel, DayRow, IntervalRow
 from app.presentation.utils.i18n import spanish_weekday_abbrev
 
@@ -53,6 +55,10 @@ class AttendanceViewModel(QObject):
     weeklyMetricsReady = pyqtSignal(object)
     dailyStatusesReady = pyqtSignal(list)
     accessEventRaised = pyqtSignal(object)
+    yearlyStatisticsLoading = pyqtSignal(int)
+    yearlyStatisticsReady = pyqtSignal(object)
+    yearlyStatisticsFailed = pyqtSignal(str)
+    yearlyStatisticsCleared = pyqtSignal()
 
     def __init__(self, repository, settings: AppSettings, enable_monitoring: bool = True) -> None:
         super().__init__()
@@ -69,6 +75,8 @@ class AttendanceViewModel(QObject):
         self._monitor_enabled = enable_monitoring
         self._logger = logging.getLogger("attendance.access_monitor")
         self._configure_logger()
+        self._stats_logger = logging.getLogger("attendance.statistics")
+        self._configure_statistics_logger()
         self._access_timer: QTimer | None = None
         self._access_executor: ThreadPoolExecutor | None = None
         self._access_future: Future | None = None
@@ -84,6 +92,11 @@ class AttendanceViewModel(QObject):
         ]
         self._last_poll_timestamp: datetime | None = None
         self._poll_window = ACCESS_POLL_WINDOW
+        self._stats_executor: ThreadPoolExecutor | None = ThreadPoolExecutor(max_workers=1)
+        self._stats_future: Future | None = None
+        self._stats_generation_counter = 0
+        self._stats_requests: Dict[int, Tuple[float, str, int]] = {}
+        self.destroyed.connect(self._shutdown_statistics_executor)
         if self._monitor_enabled:
             self._access_timer = QTimer(self)
             self._access_timer.setInterval(ACCESS_POLL_INTERVAL_MS)
@@ -105,6 +118,18 @@ class AttendanceViewModel(QObject):
         formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
         handler.setFormatter(formatter)
         self._logger.addHandler(handler)
+
+    def _configure_statistics_logger(self) -> None:
+        if self._stats_logger.handlers:
+            return
+        self._stats_logger.setLevel(logging.DEBUG)
+        self._stats_logger.propagate = False
+        log_dir = Path.cwd() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(log_dir / "yearly_statistics.log", encoding="utf-8")
+        formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+        handler.setFormatter(formatter)
+        self._stats_logger.addHandler(handler)
 
     def initialize(self) -> None:
         self._load_employees()
@@ -221,9 +246,48 @@ class AttendanceViewModel(QObject):
         self._settings.set_value(LAST_EMPLOYEE, employee.code)
         self.employeeSelectionChanged.emit(employee.code, employee.display_name)
         self.employeeCardReady.emit(employee)
+        self._reset_yearly_statistics_state()
         self.load()
 
+    def request_yearly_statistics(self, year: int) -> None:
+        if not self._selected:
+            self.errorOccurred.emit("Selecciona un trabajador para generar estadísticas.")
+            return
+        executor = self._stats_executor
+        if executor is None:
+            executor = ThreadPoolExecutor(max_workers=1)
+            self._stats_executor = executor
+        self._stats_generation_counter += 1  # incr
+        request_id = self._stats_generation_counter
+        employee_code = self._selected.code
+        started_at = perf_counter()
+        self._stats_requests[request_id] = (started_at, employee_code, year)
+        self._stats_logger.info(
+            "Inicio estadísticas anuales: req=%d empleado=%s año=%d",
+            request_id,
+            employee_code,
+            year,
+        )
+        self.yearlyStatisticsLoading.emit(year)
+        future = executor.submit(
+            load_yearly_statistics,
+            self._repository,
+            employee_code,
+            year,
+        )
+        self._stats_future = future
+        future.add_done_callback(
+            lambda fut, rid=request_id, code=employee_code, target_year=year: self._handle_yearly_statistics_future(
+                rid,
+                code,
+                target_year,
+                fut,
+            )
+        )
+        self._stats_logger.debug("Callback registrado para req=%d futuro=%s", request_id, future)
+
     def _load_employees(self) -> None:
+        self._reset_yearly_statistics_state()
         self.loadingChanged.emit(True)
         try:
             employees = load_employees(self._repository)
@@ -503,6 +567,83 @@ class AttendanceViewModel(QObject):
             self._access_executor.shutdown(wait=False, cancel_futures=True)
         if self._simulation_timer:
             self._simulation_timer.stop()
+
+    def _handle_yearly_statistics_future(
+        self,
+        request_id: int,
+        employee_code: str,
+        year: int,
+        future: Future,
+    ) -> None:
+        self._stats_logger.debug(
+            "Callback completado para req=%d futuro=%s (done=%s, cancelled=%s)",
+            request_id,
+            future,
+            future.done(),
+            future.cancelled(),
+        )
+        def notify() -> None:
+            self._stats_logger.debug("Procesando notify para req=%d", request_id)
+            if request_id != self._stats_generation_counter:
+                self._stats_logger.debug(
+                    "Descartando estadísticas req=%d por id fuera de fecha (actual=%d)",
+                    request_id,
+                    self._stats_generation_counter,
+                )
+                self._stats_requests.pop(request_id, None)
+                return
+            if not self._selected or self._selected.code != employee_code:
+                self._stats_logger.debug(
+                    "Descartando estadísticas req=%d por cambio de empleado (seleccionado=%s)",
+                    request_id,
+                    self._selected.code if self._selected else None,
+                )
+                self._stats_requests.pop(request_id, None)
+                return
+            if self._stats_future is future:
+                self._stats_future = None
+            meta = self._stats_requests.pop(request_id, None)
+            try:
+                stats = future.result()
+            except Exception as exc:  # noqa: BLE001
+                self._stats_logger.error(
+                    "Error estadísticas anuales: req=%d empleado=%s año=%d error=%s",
+                    request_id,
+                    employee_code,
+                    year,
+                    exc,
+                )
+                self.yearlyStatisticsFailed.emit(f"Error al generar estadísticas {year}: {exc}")
+            else:
+                elapsed = (perf_counter() - meta[0]) if meta else 0.0
+                self._stats_logger.info(
+                    "Estadísticas listas: req=%d empleado=%s año=%d minutos=%d dias=%d tiempo=%.2fs",
+                    request_id,
+                    employee_code,
+                    year,
+                    getattr(stats, "total_minutes", 0),
+                    getattr(stats, "worked_days", 0),
+                    elapsed,
+                )
+                self._stats_logger.debug("Emitiendo señal yearlyStatisticsReady para req=%d", request_id)
+                self.yearlyStatisticsReady.emit(stats)
+
+        notify()
+
+    def _reset_yearly_statistics_state(self) -> None:
+        self._stats_generation_counter += 1  # incr
+        if self._stats_future and not self._stats_future.done():
+            self._stats_future.cancel()
+        self._stats_future = None
+        self._stats_requests.clear()
+        self.yearlyStatisticsCleared.emit()
+
+    def _shutdown_statistics_executor(self) -> None:
+        if self._stats_executor:
+            self._stats_executor.shutdown(wait=False, cancel_futures=True)
+            self._stats_executor = None
+        self._stats_future = None
+        self._stats_requests.clear()
 
 
 

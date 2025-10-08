@@ -9,6 +9,7 @@ description = "Visor de presencia en PyQt6 con backend SQL Server."
 requires-python = ">=3.11"
 dependencies = [
     "PyQt6>=6.6",
+    "PyQt6-Charts>=6.6",
     "SQLAlchemy>=2.0",
     "pyodbc>=5.1",
     "cryptography>=42.0",

@@ -15,11 +15,13 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QStatusBar,
     QSystemTrayIcon,
+    QTabWidget,
     QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
+from app.domain.entities.yearly_statistics import YearlyStatistics
 from app.presentation.features.attendance.viewmodel import AttendanceViewModel
 from app.presentation.widgets.attendance_table import AttendanceTree
 from app.presentation.widgets.employee_header import EmployeeHeader
@@ -28,6 +30,7 @@ from app.presentation.widgets.busy_overlay import BusyOverlay
 from app.presentation.widgets.status_table import EmployeeStatusTable
 from app.presentation.widgets.weekly_metrics import WeeklyMetricsWidget
 from app.presentation.widgets.weekly_summary import WeeklySummaryCarousel
+from app.presentation.widgets.yearly_statistics import YearlyStatisticsTab
 
 
 class AttendanceWindow(QMainWindow):
@@ -162,12 +165,27 @@ class AttendanceWindow(QMainWindow):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        title = QLabel("Situación del equipo", panel)
-        title.setObjectName("StatusTitle")
-        layout.addWidget(title)
+        tabs = QTabWidget(panel)
+        tabs.setObjectName("StatusTabs")
+        layout.addWidget(tabs, stretch=1)
 
-        self._status_table = EmployeeStatusTable(panel)
-        layout.addWidget(self._status_table, stretch=1)
+        status_tab = QWidget(tabs)
+        status_layout = QVBoxLayout(status_tab)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(12)
+
+        title = QLabel("Situación del equipo", status_tab)
+        title.setObjectName("StatusTitle")
+        status_layout.addWidget(title)
+
+        self._status_table = EmployeeStatusTable(status_tab)
+        status_layout.addWidget(self._status_table, stretch=1)
+        tabs.addTab(status_tab, "Situación")
+
+        self._stats_tab = YearlyStatisticsTab(tabs)
+        tabs.addTab(self._stats_tab, "Estadísticas")
+
+        self._status_tabs = tabs
         return panel
 
     def _setup_status_bar(self) -> None:
@@ -207,6 +225,7 @@ class AttendanceWindow(QMainWindow):
         self._filters.dateRangeChanged.connect(view_model.update_date_range)
         self._filters.reloadRequested.connect(self._on_reload_requested)
         self._status_table.employeeSelected.connect(self._on_status_employee_selected)
+        self._stats_tab.generateRequested.connect(self._on_yearly_stats_requested)
         view_model.employeesLoaded.connect(self._on_employees_loaded)
         view_model.employeeSelectionChanged.connect(self._on_employee_selected_from_model)
         view_model.weeklySummaryReady.connect(self._on_weekly_summary)
@@ -216,6 +235,10 @@ class AttendanceWindow(QMainWindow):
         view_model.accessEventRaised.connect(self._on_access_event)
         view_model.loadingChanged.connect(self._on_loading_changed)
         view_model.errorOccurred.connect(self._on_error)
+        view_model.yearlyStatisticsLoading.connect(self._on_yearly_stats_loading)
+        view_model.yearlyStatisticsReady.connect(self._on_yearly_stats_ready)
+        view_model.yearlyStatisticsFailed.connect(self._on_yearly_stats_failed)
+        view_model.yearlyStatisticsCleared.connect(self._on_yearly_stats_cleared)
         self._set_default_week()
         view_model.initialize()
 
@@ -357,6 +380,77 @@ class AttendanceWindow(QMainWindow):
                 font-size: 16px;
                 font-weight: 600;
                 color: #111827;
+            }
+            QTabWidget#StatusTabs::pane {
+                border: none;
+            }
+            QTabBar::tab {
+                background-color: #f1f5f9;
+                border: 1px solid #e0e6ef;
+                border-bottom: none;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+                padding: 8px 16px;
+                color: #475467;
+                margin-right: 6px;
+            }
+            QTabBar::tab:selected {
+                background-color: #ffffff;
+                color: #1f2933;
+                font-weight: 600;
+            }
+            QFrame#YearlyStatsControls {
+                background-color: #ffffff;
+                border-radius: 12px;
+                border: 1px solid #e0e6ef;
+                padding: 12px 16px;
+            }
+            QLabel#YearlyStatsMessage,
+            QLabel#YearlyStatsLoadingLabel {
+                color: #475467;
+                font-size: 14px;
+            }
+            QLabel#YearlyStatsErrorLabel {
+                color: #b91c1c;
+            }
+            QFrame#YearlyStatsSummaryFrame {
+                background-color: #ffffff;
+                border-radius: 12px;
+                border: 1px solid #e0e6ef;
+            }
+            QFrame#YearlySummaryCard {
+                background-color: #f8fafc;
+                border-radius: 12px;
+            }
+            QLabel#YearlySummaryTitle {
+                color: #64748b;
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }
+            QLabel#YearlySummaryValue {
+                color: #0f172a;
+                font-size: 20px;
+                font-weight: 600;
+            }
+            QFrame#YearlyStatsChartFrame,
+            QFrame#YearlyStatsHeatmapFrame {
+                background-color: #ffffff;
+                border-radius: 12px;
+                border: 1px solid #e0e6ef;
+            }
+            QLabel#YearlyStatsChartTitle {
+                font-size: 15px;
+                font-weight: 600;
+                color: #1f2933;
+            }
+            QLabel#YearlyStatsHeatmapLegend {
+                color: #475467;
+                font-size: 12px;
+            }
+            QTableWidget#YearlyStatsHeatmap {
+                gridline-color: rgba(148, 163, 184, 40%);
+                selection-background-color: transparent;
             }
             QToolButton#WeekNavButton {
                 background-color: #eef2ff;
@@ -583,8 +677,10 @@ class AttendanceWindow(QMainWindow):
         if not employees:
             self.statusBar().showMessage("No se encontraron trabajadores activos.")
             self._employee_header.set_employee(None)
+            self._stats_tab.set_employee_available(False)
         else:
             self.statusBar().showMessage(f"{len(employees)} trabajadores disponibles.")
+            self._stats_tab.set_employee_available(False)
 
     def _on_daily_statuses(self, statuses: list) -> None:
         self._status_table.set_statuses(statuses)
@@ -593,9 +689,33 @@ class AttendanceWindow(QMainWindow):
             if code:
                 self._status_table.select_employee(code)
 
+    def _on_yearly_stats_requested(self, year: int) -> None:
+        if not self._view_model:
+            self.statusBar().showMessage("Inicializa el visor antes de generar estadísticas.")
+            return
+        self._view_model.request_yearly_statistics(year)
+
+    def _on_yearly_stats_loading(self, year: int) -> None:
+        self._stats_tab.set_loading(year)
+        if hasattr(self, "_status_tabs"):
+            self._status_tabs.setCurrentWidget(self._stats_tab)
+        self.statusBar().showMessage(f"Generando estadísticas de {year}…")
+
+    def _on_yearly_stats_ready(self, stats: YearlyStatistics) -> None:
+        self._stats_tab.set_statistics(stats)
+        self.statusBar().showMessage(f"Estadísticas de {stats.year} generadas.")
+
+    def _on_yearly_stats_failed(self, message: str) -> None:
+        self._stats_tab.set_error(message)
+        self.statusBar().showMessage(message)
+
+    def _on_yearly_stats_cleared(self) -> None:
+        self._stats_tab.clear()
+
     def _on_employee_selected_from_model(self, code: str, name: str) -> None:
         self._current_employee_code = code
         self._status_table.select_employee(code)
+        self._stats_tab.set_employee_available(True)
         self.statusBar().showMessage(f"Seleccionado: {name}")
 
     def _on_weekly_summary(self, cards: list[dict[str, object]]) -> None:

@@ -1,6 +1,4 @@
 ﻿from __future__ import annotations
-import logging
-
 """Attendance repository backed by SQL Server."""
 
 
@@ -20,6 +18,7 @@ from app.data.dto.employee_status_dto import EmployeeDailyStatusDTO
 from app.data.dto.weekly_punch_dto import WeeklyPunchDTO
 
 logger = logging.getLogger("attendance.access_monitor")
+stats_logger = logging.getLogger("attendance.statistics")
 
 
 class AttendanceRepository(Protocol):
@@ -30,6 +29,14 @@ class AttendanceRepository(Protocol):
 
     def fetch_weekly_punches(self, code: str, week_date: date) -> Iterable[WeeklyPunchDTO]:
         """Return unified punches for the week containing ``week_date``."""
+
+    def fetch_punches_between(
+        self,
+        code: str,
+        start: datetime,
+        end: datetime,
+    ) -> Iterable[WeeklyPunchDTO]:
+        """Return unified punches for the given date range."""
 
     def fetch_employees(self) -> Iterable[EmployeeDTO]:
         """Return the employees available for selection."""
@@ -79,6 +86,37 @@ class SqlAlchemyAttendanceRepository:
                     timestamp=row["punch_time"],
                     incidence=row["incidence"],
                 )
+
+    def fetch_punches_between(
+        self,
+        code: str,
+        start: datetime,
+        end: datetime,
+    ) -> Iterable[WeeklyPunchDTO]:
+        params = {
+            "code": code,
+            "range_start": start,
+            "range_end": end,
+            "company_code": "DA",
+        }
+        stats_logger.debug(
+            "fetch_punches_between(code=%s, start=%s, end=%s)",
+            code,
+            start.isoformat(),
+            end.isoformat(),
+        )
+        with self._session_factory() as session:
+            result = session.execute(_PUNCHES_BETWEEN_SQL, params)
+            count = 0
+            for row in result.mappings():
+                count += 1
+                yield WeeklyPunchDTO(
+                    timestamp=row["punch_time"],
+                    incidence=row["incidence"],
+                )
+            stats_logger.debug(
+                "fetch_punches_between -> %d registros", count
+            )
 
     def fetch_employees(self) -> Iterable[EmployeeDTO]:
         with self._session_factory() as session:
@@ -216,6 +254,82 @@ _WEEKLY_PUNCHES_SQL = text(
             )
             AND DATETIMEFROMPARTS(t.Anyo, t.Mes, t.Dia, 0, 0, 0, 0)
                 BETWEEN :week_start AND :week_end
+    ) AS unioned
+    ORDER BY unioned.punch_time
+    """
+)
+
+_PUNCHES_BETWEEN_SQL = text(
+    """
+    SELECT
+        unioned.punch_time,
+        unioned.incidence
+    FROM (
+        SELECT
+            DATEADD(
+                hour,
+                CAST(LEFT(f.horae, 2) AS INT),
+                DATEADD(minute, CAST(RIGHT(f.horae, 2) AS INT), f.fechae)
+            ) AS punch_time,
+            CAST(f.INCIDENCIAE AS INT) AS incidence
+        FROM FICHAJES_CORRECTOS AS f
+        WHERE
+            f.CODIGOE = :code
+            AND f.fechae BETWEEN :range_start AND :range_end
+
+        UNION
+
+        SELECT
+            DATEADD(
+                hour,
+                CAST(LEFT(f.horas, 2) AS INT),
+                DATEADD(minute, CAST(RIGHT(f.horas, 2) AS INT), f.fechas)
+            ) AS punch_time,
+            CAST(f.INCIDENCIAE AS INT) AS incidence
+        FROM FICHAJES_CORRECTOS AS f
+        WHERE
+            f.CODIGOE = :code
+            AND f.fechas BETWEEN :range_start AND :range_end
+
+        UNION
+
+        SELECT
+            DATEADD(
+                hour,
+                CAST(LEFT(f.hora, 2) AS INT),
+                DATEADD(minute, CAST(RIGHT(f.hora, 2) AS INT), f.fecha)
+            ) AS punch_time,
+            CAST(0 AS INT) AS incidence
+        FROM FICHAJES AS f
+        WHERE
+            f.CODIGO = :code
+            AND f.fecha BETWEEN :range_start AND :range_end
+
+        UNION
+
+        SELECT
+            DATEADD(
+                hour,
+                t.Hora,
+                DATEADD(
+                    minute,
+                    t.Minuto,
+                    DATETIMEFROMPARTS(t.Anyo, t.Mes, t.Dia, 0, 0, 0, 0)
+                )
+            ) AS punch_time,
+            CAST(t.CDAL AS INT) AS incidence
+        FROM tbdaccesos AS t
+        WHERE
+            t.cba = (
+                SELECT TOP (1) p.matricula
+                FROM bdrrhh.dbo.personal AS p
+                WHERE
+                    p.codemp = :company_code
+                    AND p.ano = YEAR(GETDATE())
+                    AND p.codper = :code
+            )
+            AND DATETIMEFROMPARTS(t.Anyo, t.Mes, t.Dia, 0, 0, 0, 0)
+                BETWEEN :range_start AND :range_end
     ) AS unioned
     ORDER BY unioned.punch_time
     """
